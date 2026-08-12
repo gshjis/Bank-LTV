@@ -113,6 +113,8 @@ make train RUN_NAME=baseline
 make help                 # список команд
 make install              # установить зависимости
 make check                # проверить синтаксис
+make typecheck            # проверить типизацию через Pyright
+make test                 # запустить тесты
 make train                # запустить один эксперимент
 make experiment           # запустить серию из 72 конфигураций
 make experiment-dry-run   # показать конфигурации без обучения

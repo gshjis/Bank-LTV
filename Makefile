@@ -12,7 +12,7 @@ SEED ?= 42
 MAX_RUNS ?= 0
 PORT ?= 5000
 
-.PHONY: help install check train experiment experiment-dry-run mlflow-ui mlflow-server
+.PHONY: help install check typecheck test train experiment experiment-dry-run mlflow-ui mlflow-server
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*##"; printf "Использование: make <цель> [VAR=value]\n\nЦели:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -22,6 +22,12 @@ install: ## Установить зависимости через Poetry
 
 check: ## Проверить синтаксис Python-скриптов
 	$(PYTHON) -m py_compile src/train.py src/run_experiments.py
+
+typecheck: ## Проверить типы через Pyright
+	$(POETRY) run pyright
+
+test: ## Запустить тесты pytest
+	$(POETRY) run pytest -q
 
 train: ## Запустить один обучающий run
 	$(PYTHON) src/train.py \

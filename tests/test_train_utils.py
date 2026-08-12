@@ -29,7 +29,7 @@ def test_preprocessor_fits_statistics_only_on_train_and_normalizes_categories():
     assert preprocessor.numeric_medians["amount"] == 20.0
     assert transformed.loc[0, "amount"] == 1000.0
     assert transformed.loc[0, "city"] == "__missing__"
-    assert not transformed.isna().any().any()
+    assert not bool(transformed.isna().to_numpy().any())
     assert "client_id" not in transformed.columns
     assert train.loc[0, "city"] == "MOSCOW"
 

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias, cast
 
 import catboost as cb
 import mlflow
@@ -25,7 +26,10 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
-DEFAULT_DROP_COLUMNS = [
+type Metrics = dict[str, Any]
+type ModelParams = dict[str, Any]
+
+DEFAULT_DROP_COLUMNS: list[str] = [
     "previous-cards",
     "client_id",
     "fact-region",
@@ -83,7 +87,14 @@ def parse_args() -> argparse.Namespace:
 
 def split_data(
     df: pd.DataFrame, target: str, seed: int, test_size: float, val_size: float
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+]:
     """Делит данные на train/validation/test со стратификацией."""
     if not 0 < test_size < 1 or not 0 < val_size < 1:
         raise ValueError("test-size и val-size должны быть между 0 и 1")
@@ -92,7 +103,7 @@ def split_data(
 
     x = df.drop(columns=[target])
     y = df[target]
-    x_train, x_test, y_train, y_test = train_test_split(
+    x_train, x_test, y_train, y_test = train_test_split(  # type: ignore[assignment]
         x,
         y,
         test_size=test_size,
@@ -100,21 +111,21 @@ def split_data(
         stratify=y,
     )
     relative_val_size = val_size / (1 - test_size)
-    x_train, x_val, y_train, y_val = train_test_split(
+    x_train, x_val, y_train, y_val = train_test_split(  # type: ignore[assignment]
         x_train,
         y_train,
         test_size=relative_val_size,
         random_state=seed,
         stratify=y_train,
     )
-    return x_train, x_val, x_test, y_train, y_val, y_test
+    return x_train, x_val, x_test, y_train, y_val, y_test  # type: ignore[return-value]
 
 
 class TabularPreprocessor:
     """Минимальный preprocessing, обучаемый только на train-выборке."""
 
     def __init__(self, drop_columns: list[str]) -> None:
-        self.drop_columns = drop_columns
+        self.drop_columns: list[str] = drop_columns.copy()
         self.numeric_columns: list[str] = []
         self.categorical_columns: list[str] = []
         self.numeric_medians: dict[str, float] = {}
@@ -132,7 +143,7 @@ class TabularPreprocessor:
             )
         return result
 
-    def fit(self, df: pd.DataFrame) -> "TabularPreprocessor":
+    def fit(self, df: pd.DataFrame) -> TabularPreprocessor:
         clean = df.drop(columns=self.drop_columns, errors="ignore").copy()
         self.categorical_columns = clean.select_dtypes(
             include=["object", "category"]
@@ -143,8 +154,13 @@ class TabularPreprocessor:
 
         clean = self._normalize_categories(clean, self.categorical_columns)
         for column in self.numeric_columns:
-            median = pd.to_numeric(clean[column], errors="coerce").median()
-            self.numeric_medians[column] = float(median) if pd.notna(median) else 0.0
+            numeric_series = cast(
+                pd.Series, pd.to_numeric(clean[column], errors="coerce")
+            )
+            median_value = float(numeric_series.median())
+            self.numeric_medians[column] = (
+                median_value if not math.isnan(median_value) else 0.0
+            )
         for column in self.categorical_columns:
             mode = clean[column].mode(dropna=False)
             self.categorical_modes[column] = (
@@ -158,17 +174,18 @@ class TabularPreprocessor:
         missing = sorted(set(expected) - set(result.columns))
         if missing:
             raise ValueError(f"В данных отсутствуют признаки: {missing}")
-        result = result[expected]
+        result = cast(pd.DataFrame, result[expected])
         result = self._normalize_categories(result, self.categorical_columns)
         for column in self.numeric_columns:
-            result[column] = pd.to_numeric(result[column], errors="coerce").fillna(
-                self.numeric_medians[column]
+            numeric_series = cast(
+                pd.Series, pd.to_numeric(result[column], errors="coerce")
             )
+            result[column] = numeric_series.fillna(self.numeric_medians[column])
         for column in self.categorical_columns:
             result[column] = result[column].fillna(self.categorical_modes[column])
         return result
 
-    def metadata(self) -> dict[str, Any]:
+    def metadata(self) -> dict[str, object]:
         return {
             "drop_columns": self.drop_columns,
             "numeric_columns": self.numeric_columns,
@@ -180,18 +197,24 @@ class TabularPreprocessor:
 
 def choose_threshold(y_true: pd.Series, probabilities: np.ndarray) -> float:
     thresholds = np.linspace(0.05, 0.95, 91)
-    scores = [f1_score(y_true, probabilities >= t, zero_division=0) for t in thresholds]
+    scores = [
+        f1_score(y_true, probabilities >= t, zero_division=0)  # type: ignore[arg-type]
+        for t in thresholds
+    ]
     return float(thresholds[int(np.argmax(scores))])
 
 
 def calculate_metrics(
     y_true: pd.Series, probabilities: np.ndarray, threshold: float
-) -> dict[str, Any]:
+) -> Metrics:
     predictions = (probabilities >= threshold).astype(int)
     metrics: dict[str, Any] = {
         "threshold": threshold,
         "classification_report": classification_report(
-            y_true, predictions, output_dict=True, zero_division=0
+            y_true,
+            predictions,
+            output_dict=True,
+            zero_division=0,  # type: ignore[arg-type]
         ),
     }
     if y_true.nunique() == 2:
@@ -202,7 +225,7 @@ def calculate_metrics(
     return metrics
 
 
-def flatten_metrics(metrics: dict[str, Any]) -> dict[str, float]:
+def flatten_metrics(metrics: Metrics) -> dict[str, float]:
     """Преобразует вложенный classification report в плоские MLflow metrics."""
     flat: dict[str, float] = {}
 
@@ -228,7 +251,8 @@ def main() -> None:
     df = pd.read_csv(args.train_path)
     if args.target not in df.columns:
         raise ValueError(f"В train-файле отсутствует target: {args.target}")
-    if df[args.target].isna().any() or not set(df[args.target].unique()).issubset({0, 1}):
+    target_values = cast(pd.Series, df[args.target])
+    if bool(target_values.isna().any()) or not set(target_values.unique()).issubset({0, 1}):
         raise ValueError("Поддерживается только бинарный target со значениями 0 и 1")
 
     x_train, x_val, x_test, y_train, y_val, y_test = split_data(
@@ -239,7 +263,7 @@ def main() -> None:
     x_val = preprocessor.transform(x_val)
     x_test = preprocessor.transform(x_test)
 
-    model_params = {
+    model_params: ModelParams = {
         "iterations": args.iterations,
         "learning_rate": args.learning_rate,
         "depth": args.depth,
@@ -314,7 +338,7 @@ def main() -> None:
         model_log_kwargs: dict[str, Any] = {"artifact_path": "model"}
         if args.registered_model_name:
             model_log_kwargs["registered_model_name"] = args.registered_model_name
-        mlflow.catboost.log_model(model, **model_log_kwargs)
+        mlflow.catboost.log_model(model, **model_log_kwargs)  # type: ignore[attr-defined]
 
         print(f"MLflow run: {run.info.run_id}")
         print(json.dumps(metrics, ensure_ascii=False, indent=2))

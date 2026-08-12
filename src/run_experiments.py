@@ -14,7 +14,16 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+
+class ExperimentConfig(TypedDict):
+    depth: int
+    learning_rate: float
+    l2_leaf_reg: float
+    auto_class_weights: str
+    iterations: int
+    early_stopping_rounds: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_grid() -> list[dict[str, Any]]:
+def build_grid() -> list[ExperimentConfig]:
     """Умеренная сетка: 72 запуска, подходящих для ночного batch."""
     grid = itertools.product(
         [3, 4, 5, 6],
@@ -55,7 +64,7 @@ def build_grid() -> list[dict[str, Any]]:
 
 
 def command_for(
-    config: dict[str, Any], args: argparse.Namespace, index: int
+    config: ExperimentConfig, args: argparse.Namespace, index: int
 ) -> list[str]:
     train_script = Path(__file__).with_name("train.py")
     command = [

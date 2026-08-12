@@ -32,5 +32,8 @@ jobs:
       - name: Validate Poetry configuration
         run: poetry check --lock
 
+      - name: Check types
+        run: make typecheck
+
       - name: Run tests
         run: poetry run pytest -q
