@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from train import (
+from kaggle_ltv import (
     TabularPreprocessor,
     calculate_metrics,
     choose_threshold,
