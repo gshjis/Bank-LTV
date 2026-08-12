@@ -11,6 +11,7 @@ TRACKING_URI ?= sqlite:///mlflow.db
 SEED ?= 42
 MAX_RUNS ?= 0
 START_INDEX ?= 0
+STOP_ON_ERROR ?= 0
 PORT ?= 5000
 
 .PHONY: help install check typecheck test train experiment experiment-dry-run mlflow-ui mlflow-server
@@ -48,7 +49,8 @@ experiment: ## Запустить серию ночных MLflow-экспери�
 		--seed $(SEED) \
 		--max-runs $(MAX_RUNS) \
 		--start-index $(START_INDEX) \
-		--shuffle
+		--shuffle \
+		$(if $(filter 1 true yes,$(STOP_ON_ERROR)),--stop-on-error,)
 
 experiment-dry-run: ## Показать конфигурации серии без запуска обучения
 	$(PYTHON) src/run_experiments.py \
