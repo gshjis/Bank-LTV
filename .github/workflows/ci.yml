@@ -26,6 +26,16 @@ jobs:
       - name: Check Poetry
         run: poetry --version
 
+      - name: Cache Poetry packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: poetry-${{ runner.os }}-python-3.12-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-python-3.12-
+
       - name: Install dependencies
         run: poetry install --no-interaction
 
