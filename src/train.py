@@ -205,16 +205,15 @@ def calculate_metrics(
 def flatten_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     """Преобразует вложенный classification report в плоские MLflow metrics."""
     flat: dict[str, float] = {}
-    for split, split_metrics in metrics.items():
-        if not isinstance(split_metrics, dict):
-            continue
-        for name, value in split_metrics.items():
-            if isinstance(value, dict):
-                for metric_name, metric_value in value.items():
-                    if isinstance(metric_value, (int, float)):
-                        flat[f"{split}_{name}_{metric_name}"] = float(metric_value)
-            elif isinstance(value, (int, float)):
-                flat[f"{split}_{name}"] = float(value)
+
+    def visit(value: Any, prefix: str) -> None:
+        if isinstance(value, dict):
+            for name, nested_value in value.items():
+                visit(nested_value, f"{prefix}_{name}" if prefix else str(name))
+        elif isinstance(value, (int, float)):
+            flat[prefix] = float(value)
+
+    visit(metrics, "")
     return flat
 
 
