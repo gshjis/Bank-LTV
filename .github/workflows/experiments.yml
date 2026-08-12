@@ -85,9 +85,16 @@ jobs:
       - name: Run experiment batch
         shell: bash
         run: |
+          data_dir="${HOME}/data"
+          if [[ ! -f "${data_dir}/response_train.csv" ]]; then
+            echo "Training data not found: ${data_dir}/response_train.csv"
+            echo "Copy the Kaggle data to the server outside the GitHub workspace."
+            exit 1
+          fi
+
           tracking_uri="${MLFLOW_TRACKING_URI:-sqlite:///mlflow.db}"
           make experiment \
-            TRAIN_PATH=data/response_train.csv \
+            TRAIN_PATH="${data_dir}/response_train.csv" \
             ARTIFACTS_DIR=artifacts \
             EXPERIMENT_NAME="${{ inputs.experiment_name }}" \
             TRACKING_URI="$tracking_uri" \
