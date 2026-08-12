@@ -55,18 +55,46 @@ jobs:
       - name: Install dependencies
         run: poetry install --with dev --no-interaction
 
+      - name: Start MLflow Tracking Server
+        shell: bash
+        run: |
+          set -euo pipefail
+          mlflow_data_dir="${HOME}/mlflow"
+          mkdir -p "${mlflow_data_dir}/artifacts"
+
+          if ! curl --fail --silent --show-error http://127.0.0.1:5000 >/dev/null; then
+            nohup poetry run mlflow server \
+              --host 127.0.0.1 \
+              --port 5000 \
+              --backend-store-uri "sqlite:///${mlflow_data_dir}/mlflow.db" \
+              --default-artifact-root "${mlflow_data_dir}/artifacts" \
+              > "${mlflow_data_dir}/server.log" 2>&1 &
+          fi
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:5000 >/dev/null; then
+              echo "MLflow Server is ready on 127.0.0.1:5000"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MLflow Server did not become ready"
+          cat "${mlflow_data_dir}/server.log" || true
+          exit 1
+
       - name: Run experiment batch
         shell: bash
         run: |
           tracking_uri="${MLFLOW_TRACKING_URI:-sqlite:///mlflow.db}"
           make experiment \
             TRAIN_PATH=data/response_train.csv \
-            ARTIFACTS_DIR=artifacts/experiments \
+            ARTIFACTS_DIR=artifacts \
             EXPERIMENT_NAME="${{ inputs.experiment_name }}" \
             TRACKING_URI="$tracking_uri" \
             MAX_RUNS="${{ inputs.max_runs }}" \
             START_INDEX="${{ inputs.start_index }}" \
-            SEED="${{ inputs.seed }}"
+            SEED="${{ inputs.seed }}" \
+            STOP_ON_ERROR=1
 
       - name: Upload batch summary
         if: always()
