@@ -1,0 +1,77 @@
+name: Training experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_name:
+        description: "MLflow experiment name"
+        required: true
+        default: "kaggle-ltv-nightly"
+        type: string
+      max_runs:
+        description: "Maximum number of configurations; 0 means all"
+        required: true
+        default: "72"
+        type: string
+      start_index:
+        description: "Configuration index from which to continue"
+        required: true
+        default: "0"
+        type: string
+      seed:
+        description: "Base random seed"
+        required: true
+        default: "42"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  experiments:
+    name: Run CatBoost experiments
+    if: github.actor == 'gshjis'
+    runs-on: [self-hosted, linux, x64, training]
+    timeout-minutes: 1440
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+
+    steps:
+      - name: Checkout selected revision
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.4.1
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: poetry install --with dev --no-interaction
+
+      - name: Run experiment batch
+        shell: bash
+        run: |
+          tracking_uri="${MLFLOW_TRACKING_URI:-sqlite:///mlflow.db}"
+          make experiment \
+            TRAIN_PATH=data/response_train.csv \
+            ARTIFACTS_DIR=artifacts/experiments \
+            EXPERIMENT_NAME="${{ inputs.experiment_name }}" \
+            TRACKING_URI="$tracking_uri" \
+            MAX_RUNS="${{ inputs.max_runs }}" \
+            START_INDEX="${{ inputs.start_index }}" \
+            SEED="${{ inputs.seed }}"
+
+      - name: Upload batch summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment-summary-${{ github.run_id }}
+          path: artifacts/experiments/batch_summary.jsonl
+          if-no-files-found: warn

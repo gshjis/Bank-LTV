@@ -10,6 +10,7 @@ EXPERIMENT_NAME ?= kaggle-ltv-nightly
 TRACKING_URI ?= sqlite:///mlflow.db
 SEED ?= 42
 MAX_RUNS ?= 0
+START_INDEX ?= 0
 PORT ?= 5000
 
 .PHONY: help install check typecheck test train experiment experiment-dry-run mlflow-ui mlflow-server
@@ -46,6 +47,7 @@ experiment: ## Запустить серию ночных MLflow-экспери�
 		--tracking-uri $(TRACKING_URI) \
 		--seed $(SEED) \
 		--max-runs $(MAX_RUNS) \
+		--start-index $(START_INDEX) \
 		--shuffle
 
 experiment-dry-run: ## Показать конфигурации серии без запуска обучения

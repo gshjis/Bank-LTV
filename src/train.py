@@ -9,46 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 
 import catboost as cb
 import mlflow
 import mlflow.catboost
 import numpy as np
 import pandas as pd
-from sklearn.metrics import (
-    average_precision_score,
-    classification_report,
-    f1_score,
-    roc_auc_score,
-)
-from sklearn.model_selection import train_test_split
-
-type Metrics = dict[str, Any]
-type ModelParams = dict[str, Any]
-
-DEFAULT_DROP_COLUMNS: list[str] = [
-    "previous-cards",
-    "client_id",
-    "fact-region",
-    "region",
-    "registration-region",
-    "tp-foreign",
-    "reg-and-fact-equality",
-    "post-and-fact-equality",
-    "reg-and-post-equality",
-    "reg-fact-post-and-last-credit-equality",
-    "total-of-delinquencies",
-    "max-delinquency-no",
-    "mean-delinquency-amount",
-    "driving-license",
-    "cottage",
-    "garage",
-    "land",
-    "reg-phone",
-]
+from kaggle_ltv.config import DEFAULT_DROP_COLUMNS
+from kaggle_ltv.metrics import calculate_metrics, choose_threshold, flatten_metrics
+from kaggle_ltv.preprocessing import TabularPreprocessor
+from kaggle_ltv.splitting import split_data
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,7 +45,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--depth", type=int, default=4)
     parser.add_argument("--l2-leaf-reg", type=float, default=10.0)
     parser.add_argument("--early-stopping-rounds", type=int, default=100)
-    parser.add_argument("--auto-class-weights", choices=["Balanced", "None"], default="Balanced")
+    parser.add_argument(
+        "--auto-class-weights", choices=["Balanced", "None"], default="Balanced"
+    )
     parser.add_argument("--experiment-name", default="kaggle-ltv")
     parser.add_argument("--run-name", default=None)
     parser.add_argument(
@@ -83,161 +57,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--registered-model-name", default=None)
     return parser.parse_args()
-
-
-def split_data(
-    df: pd.DataFrame, target: str, seed: int, test_size: float, val_size: float
-) -> tuple[
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.Series,
-    pd.Series,
-    pd.Series,
-]:
-    """Делит данные на train/validation/test со стратификацией."""
-    if not 0 < test_size < 1 or not 0 < val_size < 1:
-        raise ValueError("test-size и val-size должны быть между 0 и 1")
-    if test_size + val_size >= 1:
-        raise ValueError("Сумма test-size и val-size должна быть меньше 1")
-
-    x = df.drop(columns=[target])
-    y = df[target]
-    x_train, x_test, y_train, y_test = train_test_split(  # type: ignore[assignment]
-        x,
-        y,
-        test_size=test_size,
-        random_state=seed,
-        stratify=y,
-    )
-    relative_val_size = val_size / (1 - test_size)
-    x_train, x_val, y_train, y_val = train_test_split(  # type: ignore[assignment]
-        x_train,
-        y_train,
-        test_size=relative_val_size,
-        random_state=seed,
-        stratify=y_train,
-    )
-    return x_train, x_val, x_test, y_train, y_val, y_test  # type: ignore[return-value]
-
-
-class TabularPreprocessor:
-    """Минимальный preprocessing, обучаемый только на train-выборке."""
-
-    def __init__(self, drop_columns: list[str]) -> None:
-        self.drop_columns: list[str] = drop_columns.copy()
-        self.numeric_columns: list[str] = []
-        self.categorical_columns: list[str] = []
-        self.numeric_medians: dict[str, float] = {}
-        self.categorical_modes: dict[str, str] = {}
-
-    @staticmethod
-    def _normalize_categories(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-        result = df.copy()
-        for column in columns:
-            result[column] = (
-                result[column]
-                .where(result[column].notna(), "__MISSING__")
-                .astype(str)
-                .str.lower()
-            )
-        return result
-
-    def fit(self, df: pd.DataFrame) -> TabularPreprocessor:
-        clean = df.drop(columns=self.drop_columns, errors="ignore").copy()
-        self.categorical_columns = clean.select_dtypes(
-            include=["object", "category"]
-        ).columns.tolist()
-        self.numeric_columns = [
-            column for column in clean.columns if column not in self.categorical_columns
-        ]
-
-        clean = self._normalize_categories(clean, self.categorical_columns)
-        for column in self.numeric_columns:
-            numeric_series = cast(
-                pd.Series, pd.to_numeric(clean[column], errors="coerce")
-            )
-            median_value = float(numeric_series.median())
-            self.numeric_medians[column] = (
-                median_value if not math.isnan(median_value) else 0.0
-            )
-        for column in self.categorical_columns:
-            mode = clean[column].mode(dropna=False)
-            self.categorical_modes[column] = (
-                str(mode.iloc[0]).lower() if not mode.empty else "__MISSING__"
-            )
-        return self
-
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        result = df.drop(columns=self.drop_columns, errors="ignore").copy()
-        expected = self.numeric_columns + self.categorical_columns
-        missing = sorted(set(expected) - set(result.columns))
-        if missing:
-            raise ValueError(f"В данных отсутствуют признаки: {missing}")
-        result = cast(pd.DataFrame, result[expected])
-        result = self._normalize_categories(result, self.categorical_columns)
-        for column in self.numeric_columns:
-            numeric_series = cast(
-                pd.Series, pd.to_numeric(result[column], errors="coerce")
-            )
-            result[column] = numeric_series.fillna(self.numeric_medians[column])
-        for column in self.categorical_columns:
-            result[column] = result[column].fillna(self.categorical_modes[column])
-        return result
-
-    def metadata(self) -> dict[str, object]:
-        return {
-            "drop_columns": self.drop_columns,
-            "numeric_columns": self.numeric_columns,
-            "categorical_columns": self.categorical_columns,
-            "numeric_medians": self.numeric_medians,
-            "categorical_modes": self.categorical_modes,
-        }
-
-
-def choose_threshold(y_true: pd.Series, probabilities: np.ndarray) -> float:
-    thresholds = np.linspace(0.05, 0.95, 91)
-    scores = [
-        f1_score(y_true, probabilities >= t, zero_division=0)  # type: ignore[arg-type]
-        for t in thresholds
-    ]
-    return float(thresholds[int(np.argmax(scores))])
-
-
-def calculate_metrics(
-    y_true: pd.Series, probabilities: np.ndarray, threshold: float
-) -> Metrics:
-    predictions = (probabilities >= threshold).astype(int)
-    metrics: dict[str, Any] = {
-        "threshold": threshold,
-        "classification_report": classification_report(
-            y_true,
-            predictions,
-            output_dict=True,
-            zero_division=0,  # type: ignore[arg-type]
-        ),
-    }
-    if y_true.nunique() == 2:
-        metrics["roc_auc"] = float(roc_auc_score(y_true, probabilities))
-        metrics["average_precision"] = float(
-            average_precision_score(y_true, probabilities)
-        )
-    return metrics
-
-
-def flatten_metrics(metrics: Metrics) -> dict[str, float]:
-    """Преобразует вложенный classification report в плоские MLflow metrics."""
-    flat: dict[str, float] = {}
-
-    def visit(value: Any, prefix: str) -> None:
-        if isinstance(value, dict):
-            for name, nested_value in value.items():
-                visit(nested_value, f"{prefix}_{name}" if prefix else str(name))
-        elif isinstance(value, (int, float)):
-            flat[prefix] = float(value)
-
-    visit(metrics, "")
-    return flat
 
 
 def main() -> None:
@@ -263,7 +82,7 @@ def main() -> None:
     x_val = preprocessor.transform(x_val)
     x_test = preprocessor.transform(x_test)
 
-    model_params: ModelParams = {
+    model_params: dict[str, Any] = {
         "iterations": args.iterations,
         "learning_rate": args.learning_rate,
         "depth": args.depth,
