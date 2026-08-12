@@ -24,11 +24,11 @@ def split_data(
 
     x = df.drop(columns=[target])
     y = df[target]
-    x_train, x_test, y_train, y_test = train_test_split(  # type: ignore[assignment]
+    x_train, x_test, y_train, y_test = train_test_split(
         x, y, test_size=test_size, random_state=seed, stratify=y
     )
     relative_val_size = val_size / (1 - test_size)
-    x_train, x_val, y_train, y_val = train_test_split(  # type: ignore[assignment]
+    x_train, x_val, y_train, y_val = train_test_split(
         x_train,
         y_train,
         test_size=relative_val_size,

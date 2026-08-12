@@ -1,33 +1,51 @@
-# Kaggle LTV / Findata Response
+# Kaggle LTV
 
-## О проекте
+## Содержание репозитория
 
-Проект решает задачу бинарной классификации отклика клиента. В репозитории есть:
-
-- [`src/EDA.ipynb`](src/EDA.ipynb) — исследовательский анализ данных и baseline-модель;
-- [`src/train.py`](src/train.py) — воспроизводимый train-пайплайн без утечки данных;
-- [`src/run_experiments.py`](src/run_experiments.py) — серия запусков CatBoost с логированием в MLflow;
-- [`Makefile`](Makefile) — команды для установки, обучения и экспериментов.
-
-## Установка проекта и зависимостей
-
-Требуется Python 3.12+ и Poetry.
-
-```bash
-poetry install
+```text
+.
+├── data/                              # локальные данные, не коммитятся
+├── src/
+│   ├── EDA.ipynb                      # EDA и baseline-анализ
+│   ├── train.py                       # CLI одного обучения
+│   ├── run_experiments.py             # запуск серии конфигураций
+│   └── kaggle_ltv/                    # переиспользуемые модули пайплайна
+├── tests/                             # unit-тесты и проверки notebook
+├── .github/workflows/ci.yml           # CI: типизация и тесты
+├── .github/workflows/experiments.yml  # ручной remote-запуск
+├── Makefile
+├── pyproject.toml
+└── poetry.lock
 ```
 
-Проверка синтаксиса:
+## Требования
+
+- Python 3.12+;
+- Git;
+- Poetry 2.x;
+- для удалённых запусков — Linux-сервер и GitHub self-hosted runner.
+
+## Установка локально
+
+```bash
+git clone https://github.com/gshjis/Bank-LTV.git
+cd Bank-LTV
+poetry install --with dev
+```
+
+Проверка окружения:
 
 ```bash
 make check
+make typecheck
+make test
 ```
 
 ## Данные
 
-Данные доступны на странице соревнования: [Findata Response на Kaggle](https://www.kaggle.com/competitions/findata-response/data).
+Данные скачать со страницы [Findata Response на Kaggle](https://www.kaggle.com/competitions/findata-response/data).
 
-Скачайте файлы и положите их в директорию [`data/`](data/):
+Для локальной работы файлы должны находиться в [`data/`](data/):
 
 ```text
 data/
@@ -35,103 +53,198 @@ data/
 └── response_test.csv
 ```
 
-## Анализ инсайтов EDA
+Данные не следует коммитить в Git.
 
-Основные результаты исследования находятся в [`src/EDA.ipynb`](src/EDA.ipynb). В notebook целевой показатель анализируется как доля положительных значений `target`.
+Для удалённого self-hosted runner данные хранятся вне GitHub Actions workspace:
 
-### Наиболее информативные группы признаков
+```text
+~/data/response_train.csv
+~/data/response_test.csv
+```
 
-В notebook категории считаются информативными, если одновременно выполняются условия:
+Передать их на сервер можно с локального ПК:
 
-- в категории больше 30 наблюдений;
-- стандартная ошибка доли target меньше 0.05;
-- нижняя граница приблизительного 95%-го интервала выше глобальной доли target.
+```bash
+ssh <user_name>@IP_address "mkdir -p ~/data"
+scp data/response_train.csv data/response_test.csv \
+  <user_name>@IP_address:~/data/
+```
 
-По той же логике ищутся пары категориальных признаков: сочетание должно содержать минимум 100 наблюдений, иметь `sem < 0.05`, а нижняя граница интервала должна быть выше глобального среднего target. Таким образом, ключевыми считаются не отдельные признаки сами по себе, а их устойчивые категории и комбинации с повышенной долей положительного класса. Итоговые конкретные категории и пары выводятся в таблицах `final_df` и `final_pairs` внутри [`src/EDA.ipynb`](src/EDA.ipynb).
+## EDA
 
-### Пропуски
+Исследование находится в [`src/EDA.ipynb`](src/EDA.ipynb). Notebook содержит:
 
-Для каждого признака строится таблица `nan_stats` с долей пропусков и типом данных. Пропуски затем обрабатываются так:
+- анализ типов и пропусков;
+- оценку доли положительного target по категориям;
+- поиск сильных пар категориальных признаков;
+- анализ числовых распределений и выбросов;
+- baseline CatBoost;
+- сравнение class weights и threshold.
 
-- числовые признаки — медианой;
-- категориальные признаки — первой модой.
+Notebook можно открыть локально через Jupyter или VS Code. EDA не запускается в ночном experiment workflow.
 
-Важно: в notebook сначала выполняется преобразование категорий через `astype(str).str.lower()`, поэтому категориальные NaN могут превратиться в строковое значение `"nan"` и не попасть в исходную статистику пропусков. В production-пайплайне эта проблема устранена: preprocessing рассчитывается только на train-части в [`src/train.py`](src/train.py).
+## Локальное обучение
 
-### Наименее информативные признаки
-
-В EDA явно отмечены признаки, которые исключаются из baseline:
-
-- `driving-license` — константный признак, все значения равны 0;
-- `cottage` — редкий признак, около 1% наблюдений;
-- `garage` — около 2% наблюдений;
-- `land` — около 4% наблюдений;
-- `reg-phone` — около 6% наблюдений;
-- `client_id` — идентификатор, удалённый как потенциальный источник переобучения;
-- `previous-cards` — удалён до основного EDA;
-- дублирующие региональные признаки: `fact-region`, `region`, `registration-region`, `tp-foreign`;
-- дублирующие equality-признаки и признаки просрочек.
-
-### Числовые признаки
-
-Для числовых признаков предусмотрен анализ среднего, медианы, моды, дисперсии, квартилей, IQR и выбросов по правилу `1.5 × IQR`. Графики строятся функцией `plot_numeric_analysis()` при её вызове.
-
-### Baseline-модель
-
-Сравниваются две CatBoost-модели:
-
-- baseline без балансировки классов;
-- модель с `auto_class_weights='Balanced'`, `depth=4`, `learning_rate=0.005`, `l2_leaf_reg=10` и early stopping.
-
-Для weighted-модели дополнительно проверяются пороги 0.5, 0.6, 0.7 и 0.8, чтобы оценить компромисс между precision и recall.
-
-Числовые значения таблиц пропусков и top-категорий не зафиксированы в самом notebook — они формируются при выполнении ячеек. Поэтому README не подменяет результаты EDA выдуманными значениями: актуальные конкретные значения нужно смотреть в выводах `nan_stats`, `final_df` и `final_pairs` после запуска [`src/EDA.ipynb`](src/EDA.ipynb).
-
-## Анализ модели и метрик
-
-Модель — CatBoostClassifier с поддержкой категориальных признаков. В production-пайплайне:
-
-- данные делятся на train, validation и test со стратификацией;
-- медианы и моды для заполнения пропусков вычисляются только на train;
-- validation используется для early stopping и выбора threshold;
-- test используется для независимой финальной оценки;
-- параметры, метрики, preprocessing и модель логируются в MLflow.
-
-Логируются ROC-AUC, Average Precision, accuracy, precision, recall, F1-score и classification report для validation и test. Результаты можно сравнивать между запусками в MLflow.
-
-Запуск одного обучения:
+Один запуск:
 
 ```bash
 make train RUN_NAME=baseline
 ```
 
-## Makefile
-
-Основные команды:
+Ручной запуск серии:
 
 ```bash
-make help                 # список команд
-make install              # установить зависимости
-make check                # проверить синтаксис
-make typecheck            # проверить типизацию через Pyright
-make test                 # запустить тесты
-make train                # запустить один эксперимент
-make experiment           # запустить серию из 72 конфигураций
-make experiment-dry-run   # показать конфигурации без обучения
-make mlflow-ui             # открыть локальный MLflow UI
-make mlflow-server         # запустить Tracking Server
+make experiment MAX_RUNS=3 EXPERIMENT_NAME=kaggle-ltv-local
 ```
 
-Ночной запуск серии экспериментов:
+Основные параметры:
 
 ```bash
-make experiment EXPERIMENT_NAME=kaggle-ltv-nightly MAX_RUNS=72
+make experiment \
+  EXPERIMENT_NAME=kaggle-ltv-local \
+  MAX_RUNS=72 \
+  START_INDEX=0 \
+  SEED=42
 ```
 
-Результаты сохраняются в SQLite-базу [`mlflow.db`](mlflow.db). Для просмотра:
+Для локальных runs по умолчанию используется SQLite-база `mlflow.db`.
+
+## MLflow локально
+
+Запустить UI:
 
 ```bash
 make mlflow-ui
 ```
 
-После запуска UI откройте [http://127.0.0.1:5000](http://127.0.0.1:5000). Отдельный run создаётся для каждой конфигурации, что позволяет сравнивать гиперпараметры и метрики в одном MLflow experiment.
+Открыть [http://127.0.0.1:5000](http://127.0.0.1:5000).
+
+MLflow-данные по умолчанию хранятся в [`mlflow.db`](mlflow.db), артефакты — в `mlartifacts/`.
+
+## Тесты и типизация
+
+```bash
+make test       # pytest
+make typecheck  # Pyright
+make check      # py_compile
+```
+
+Тесты проверяют preprocessing, split, threshold, метрики и корректность структуры [`src/EDA.ipynb`](src/EDA.ipynb). Тяжёлое обучение и MLflow в тестах не запускаются.
+
+## GitHub Actions
+
+### CI
+
+[`ci.yml`](.github/workflows/ci.yml) запускается на `push` и `pull_request`. Он выполняет:
+
+1. установку Python, Poetry и зависимостей;
+2. проверку [`poetry.lock`](poetry.lock);
+3. Pyright;
+4. pytest.
+
+CI не обучает модели.
+
+### Training experiments
+
+[`experiments.yml`](.github/workflows/experiments.yml) запускается вручную:
+
+1. открыть **GitHub → Actions → Training experiments**;
+2. нажать **Run workflow**;
+3. указать `experiment_name`, `max_runs`, `start_index` и `seed`;
+4. запустить workflow.
+
+Workflow выполняется только владельцем репозитория и только на self-hosted runner с labels:
+
+```text
+self-hosted
+linux
+x64
+training
+```
+
+Внутри workflow:
+
+1. checkout-ится выбранный commit;
+2. устанавливаются зависимости;
+3. автоматически поднимается MLflow Server на `127.0.0.1:5000`, если он ещё не запущен;
+4. проверяется наличие `~/data/response_train.csv`;
+5. запускается [`make experiment`](Makefile:39);
+6. результаты записываются в MLflow;
+7. summary загружается в GitHub Actions Artifact.
+
+При ошибке отдельного запуска используется `STOP_ON_ERROR=1`, поэтому workflow завершается с ошибкой.
+
+## Настройка self-hosted runner
+
+На сервере установить GitHub Actions runner через **Repository -> Settings -> Actions -> Runners -> New self-hosted runner**.
+
+Runner должен быть зарегистрирован с labels:
+
+```text
+self-hosted
+linux
+x64
+training
+```
+
+После регистрации проверить его статус `Idle` или `Online` в настройках репозитория.
+
+Код вручную в workspace копировать не нужно: [`actions/checkout`](.github/workflows/experiments.yml:40) скачивает нужный commit автоматически. Данные хранятся отдельно в `/home/gshjis/data`.
+
+## MLflow Tracking URI и Secret
+
+В GitHub создать **Settings -> Secrets and variables -> Actions -> New repository secret**:
+
+```text
+Name: MLFLOW_TRACKING_URI
+Value: http://127.0.0.1:5000
+```
+
+Такой URI подходит, если self-hosted runner и MLflow Server работают на одном сервере.
+
+MLflow Server хранит данные вне workspace:
+
+```text
+~/mlflow/mlflow.db
+~/mlflow/artifacts/
+~/mlflow/server.log
+```
+
+## Просмотр MLflow с локального ПК
+
+MLflow слушает только `127.0.0.1` на удалённом сервере. Для доступа с ПК создать SSH-туннель:
+
+```bash
+ssh -N -L 5000:127.0.0.1:5000 <user_name>@IP_address
+```
+
+Оставить терминал открытым и перейти в браузере на:
+
+```text
+http://127.0.0.1:5000
+```
+
+## Makefile
+
+[`Makefile`](Makefile) содержит команды:
+
+```bash
+make help                 # список команд
+make install              # установка зависимостей
+make check                # проверка синтаксиса
+make typecheck            # проверка типов
+make test                 # запуск тестов
+make train                # один run
+make experiment           # серия экспериментов
+make experiment-dry-run   # конфигурации без запуска
+make mlflow-ui             # локальный MLflow UI
+make mlflow-server         # MLflow Tracking Server
+```
+
+## Где искать результаты
+
+- метрики и параметры — в MLflow experiment;
+- модели и preprocessing — в MLflow artifacts;
+- локальные файлы одного запуска — в `artifacts/`;
+- сводка серии — `artifacts/experiments/batch_summary.jsonl`;
+- логи MLflow Server — `~/mlflow/server.log`.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import pandas as pd
 
@@ -29,7 +29,7 @@ class TabularPreprocessor:
             )
         return result
 
-    def fit(self, df: pd.DataFrame) -> "TabularPreprocessor":
+    def fit(self, df: pd.DataFrame) -> TabularPreprocessor:
         clean = df.drop(columns=self.drop_columns, errors="ignore").copy()
         self.categorical_columns = clean.select_dtypes(
             include=["object", "category"]
